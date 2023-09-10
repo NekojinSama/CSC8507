@@ -1,0 +1,170 @@
+#version 430 core
+
+layout(local_size_x = 64, local_size_y = 1,local_size_z = 1) in;
+layout(rgba32f,binding = 0) uniform image2D img_output; //allows for writing to pixels
+
+layout(std430, binding = 1) buffer positions
+{
+	float position[];
+};
+
+layout(std430, binding = 2) buffer texcoords
+{
+	vec2 texCoord[];
+};
+
+layout(std430, binding = 3) buffer indices
+{
+	int index[];
+};
+
+struct Triangle{
+	vec3 posA;
+	vec2 uvA;
+
+	vec3 posB;
+	vec2 uvB;
+
+	vec3 posC;
+	vec2 uvC;
+
+    vec3 normal;
+};
+
+uniform int radius;
+uniform vec3 paintColour;
+uniform vec3 paintCentre;
+uniform vec3 rayDir;
+
+// This doesn't work, here's how it should work:
+// - Check if any edge of Triangle intersects Sphere.
+// - If no boundary intersection exists we check the distance between paintCentre and the sphere normal projection Q onto the triangle plane < radius of sphere
+//   AND if the normal projection Q lies within the triangle.
+//   basically: https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.49.9172&rep=rep1&type=pdf It's rather confusing
+
+vec3 GetPosition(int index) {
+    return vec3(position[3 * index + 0], position[3 * index + 1], position[3 * index + 2]);
+}
+
+vec3 closestPointOnTriangle(vec3 v0, vec3 v1, vec3 v2, vec3 p) {
+
+    // Compute the vectors representing each edge of the triangle
+    vec3 edge0 = v1 - v0;
+    vec3 edge1 = v2 - v0;
+    vec3 edge2 = v1 - v2;
+
+    // Compute the vectors from each vertex to the point
+    vec3 v0p = p - v0;
+    vec3 v1p = p - v1;
+    vec3 v2p = p - v2;
+
+    // Compute the dot products of these vectors
+    float dot00 = dot(edge0, edge0);
+    float dot01 = dot(edge0, edge1);
+    float dot02 = dot(edge0, edge2);
+    float dot11 = dot(edge1, edge1);
+    float dot12 = dot(edge1, edge2);
+
+    // Compute the barycentric coordinates of the closest point
+    float invDenom = 1.0 / (dot00 * dot11 - dot01 * dot01);
+    float u = (dot11 * dot02 - dot01 * dot12) * invDenom;
+    float v = (dot00 * dot12 - dot01 * dot02) * invDenom;
+
+    // Check if the closest point is inside the triangle
+    if (u >= 0.0 && v >= 0.0 && u + v <= 1.0) {
+        return v0 + u * edge0 + v * edge1;
+    }
+
+    // The closest point is outside the triangle, so return the closest vertex
+    float d0 = length(v0p);
+    float d1 = length(v1p);
+    float d2 = length(v2p);
+    if (d0 < d1 && d0 < d2) {
+        return v0;
+    } else if (d1 < d2) {
+        return v1;
+    } else {
+        return v2;
+    }
+}
+
+bool TriangleSphereIntersect(vec3 v0, vec3 v1, vec3 v2, vec3 sphereCenter, float sphereRadius) {
+
+    // Find the closest point on the triangle to the sphere center
+    vec3 closestPoint = closestPointOnTriangle(v0, v1, v2, sphereCenter);
+
+    // Check if the closest point is within the sphere
+    float distanceSquared = distance(closestPoint, sphereCenter) * distance(closestPoint, sphereCenter);
+    if (distanceSquared > sphereRadius * sphereRadius) {
+        return false;
+    }
+
+    // The closest point is within the sphere, so the triangle intersects the sphere
+    return true;
+}
+
+// Compute barycentric coordinates (u, v, w) for
+// point p with respect to triangle (a, b, c)
+vec3 Barycentric(vec3 a, vec3 b, vec3 c, vec3 p)
+{
+    //Calculating edges of the triangle
+    vec3 v0 = b - a;
+    vec3 v1 = c - a;
+    vec3 v2 = p - a;
+
+    //Gathering of coefficents of the barycentric coordinate calculation (Distances between edges)
+    float d00 = dot(v0, v0);
+    float d01 = dot(v0, v1);
+    float d11 = dot(v1, v1);
+    float d20 = dot(v2, v0);
+    float d21 = dot(v2, v1);
+
+	//The inverse denominator removes one extra divide for efficency purposes which is nice
+    //Equivalent to the function here: https://ceng2.ktu.edu.tr/~cakir/files/grafikler/Texture_Mapping.pdf
+    float invDenom = 1.0 / (d00 * d11 - d01 * d01);
+    float v = (d11 * d20 - d01 * d21) * invDenom;
+    float w = (d00 * d21 - d01 * d20) * invDenom;
+    float u = 1.0 - v - w;
+    return vec3(u, v, w);
+}
+
+
+void main(void) {
+	int index1 = index[3 * int(gl_GlobalInvocationID.x)];
+	int index2 = index[3 * int(gl_GlobalInvocationID.x) + 1];
+	int index3 = index[3 * int(gl_GlobalInvocationID.x) + 2];
+	
+	Triangle triangle;
+	triangle.posA = GetPosition(index1);
+	triangle.posB = GetPosition(index2);
+	triangle.posC = GetPosition(index3);
+	
+	triangle.uvA = texCoord[index1];
+	triangle.uvB = texCoord[index2];
+	triangle.uvC = texCoord[index3];
+
+    triangle.normal = normalize(cross(triangle.posA - triangle.posC, triangle.posB - triangle.posC));
+	 
+	vec4 pixel = vec4(0,0,0,0);
+
+	//Triangle ray collision detection Note: I will need to detect closest edge to the sphere and send a ray from one vertex to another and if the 
+    //                                         ray collides with the sphere AND the distance of ray is less than the distance between the two vertices.
+    //                                      -The issue is that I don't check the edges of the triangles for edge cases so it's not entirely accurate.
+
+    float scalarProj = dot(triangle.normal, rayDir);
+
+	if (TriangleSphereIntersect(triangle.posA, triangle.posB, triangle.posC, paintCentre, radius) && (scalarProj > 0)) {
+        vec3 bary = Barycentric(triangle.posA, triangle.posB, triangle.posC, paintCentre);
+
+        pixel = vec4(paintColour, 1);
+        vec2 point = bary.x * triangle.uvA + bary.y * triangle.uvB + bary.z * triangle.uvC;
+
+
+        for (int x = -radius; x <= radius; x++) {
+            for (int y = -radius; y <= radius; y++) {
+
+                 if (length(vec2(x,y)) < radius) { imageStore(img_output, ivec2(point * imageSize(img_output) + ivec2(x, y)), pixel); }
+            }
+        }
+    }
+}
