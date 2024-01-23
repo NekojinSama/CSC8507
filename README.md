@@ -25,4 +25,5 @@ The Audio System could've been improved by adding sound triggers, adding global 
 As for User Interface, the improvements could've been the properly scaled UI in game. Another improvement can be adding custom textures in Menu.
 
 ## Project Showcase:
+Youtube video showing the gameplay:
 [![IMAGE ALT TEXT HERE](https://img.youtube.com/vi/IPfcGszz82g/0.jpg)](https://www.youtube.com/watch?v=IPfcGszz82g)
